@@ -10,6 +10,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <sys/sendfile.h>
+#include <sys/time.h>
 
 #define MAX_THREAD 2
 #define PORT 80
@@ -44,9 +45,14 @@ ssize_t readn(int fd, void *buf, size_t n)
     if ((nread = read(fd, ptr, nleft)) < 0) {
       if (errno == EINTR)
         nread = 0;
+      // if timeout for socket in read (socket is blocking)  
+      if (errno == EWOULDBLOCK){
+		break; 
+	  }
       else
         return(-1);
-    } 
+    }
+    // if client close its socket 
     else if (nread == 0)
       break;	/* EOF */
 
@@ -108,7 +114,8 @@ void web_request(int connfd){
 		perror("Error in read\n");
 		return;
 	}
-			
+	
+	printf("ciao\n");		
 	if (req[3] == ' '){
 		// first file html to open that contains a list of image
 		fd = open("/home/christian/index.html", O_RDONLY);
@@ -254,6 +261,16 @@ int main(void)
 	for (;;){
 		if ((connfd = accept(sockfd, (struct sockaddr *)NULL, NULL)) == -1){
 			perror("Error in accept");
+			return EXIT_FAILURE;
+		}
+
+		// set a structure timeval for manage socket blocking
+		struct timeval tv;
+		tv.tv_sec = 5;  /* 5 Secs Timeout */
+		tv.tv_usec = 0;
+		// set socket option in read
+		if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO,(char *)&tv,sizeof(struct timeval)) < 0){
+			perror("Error in set socket options\n");
 			return EXIT_FAILURE;
 		}
 

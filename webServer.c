@@ -141,7 +141,7 @@ void web_request(int connfd){
 	// write the file in the socket
 	rc = sendfile(connfd, fd, NULL, buf->st_size);
 
-	// error in write
+	// error in write with sendfile
 	if (rc == -1){
 		perror("Error in sendfile");
 		return;

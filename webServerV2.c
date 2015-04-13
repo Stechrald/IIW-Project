@@ -218,9 +218,7 @@ void *handle_conn(void *p){
 
 		// TODO work thread
 		fprintf(stderr, "Start work\n");
-		while(1){
-			web_request(thread->fd);
-		}
+		web_request(thread->fd);
 		fprintf(stderr, "End work\n");
 		
 		// close connection socket

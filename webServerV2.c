@@ -15,6 +15,7 @@
 #define MAX_THREAD 2
 #define PORT 80
 #define MAX_BUF 1024
+#define SERVER_STRING "Server: webServer/1.0.0\r\n"
 
 // struct that contains many information of thread
 struct thread_struct{
@@ -47,7 +48,7 @@ ssize_t readn(int fd, void *buf, size_t n)
         nread = 0;
       // if timeout for socket in read (socket is blocking)  
       if (errno == EWOULDBLOCK){
-		break; 
+		return -1; 
 	  }
       else
         return(-1);
@@ -58,7 +59,6 @@ ssize_t readn(int fd, void *buf, size_t n)
 
     nleft -= nread;
     ptr += nread;
-    printf("%d\n", (int)nread);
   }
   return(n-nleft);	/* restituisce >= 0 */
 }
@@ -114,7 +114,82 @@ int parse_request(char *req, char *path){
 	return j;
 }
 
-void web_request(int connfd){
+// This function send 200 success code to client, because the request is correct. Send the header to client
+
+void header_successful(int connfd, int i, ssize_t size){
+	char buf[1024];
+
+	strcpy(buf, "HTTP/1.1 200 OK\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, SERVER_STRING);
+	send(connfd, buf, strlen(buf), 0);
+	// Content_Lenght FONDAMENTALE PER PERSISTENZA PER EVITARE IL BLOCCO DEL CLIENT IN LETTURA
+	sprintf(buf, "Content-Length: %d\r\n", (int)size);
+	send(connfd, buf, strlen(buf), 0);
+	if (i == 1){
+		strcpy(buf, "Content-Type: image/jpg\r\n");
+		send(connfd, buf, strlen(buf), 0);
+	}
+	else{
+		strcpy(buf, "Content-Type: text/html\r\n");
+		send(connfd, buf, strlen(buf), 0);
+	}
+	strcpy(buf, "Connection: keep-alive\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, "\r\n");
+	send(connfd, buf, strlen(buf), 0);
+}
+
+// This function send 404 error code to client, because the request file is not found
+
+void not_found(int connfd){
+	char buf[1024];
+
+	strcpy(buf, "HTTP/1.1 404 \r\n");
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, SERVER_STRING);
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, "Content-Type: text/html\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, "\r\n");
+	send(connfd, buf, strlen(buf), 0);
+
+	sprintf(buf, "<HTML><TITLE>Not Found</TITLE>\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	sprintf(buf, "<BODY><P>The server could not fulfill\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	sprintf(buf, "your request because the resource specified\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	sprintf(buf, "is unavailable or nonexistent.\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	sprintf(buf, "</BODY></HTML>\r\n");
+	send(connfd, buf, strlen(buf), 0);
+}
+
+// This function send 500 error code to client, because an internal error occurred
+
+void internal_error(int connfd){
+	char buf[1024];
+
+	strcpy(buf, "HTTP/1.1 500 \r\n");
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, SERVER_STRING);
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, "Content-Type: text/html\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	strcpy(buf, "\r\n");
+	send(connfd, buf, strlen(buf), 0);
+
+	sprintf(buf, "<HTML><TITLE>Internal Server Error</TITLE>\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	sprintf(buf, "<BODY><P>An internal server error occurred!</P>\r\n");
+	send(connfd, buf, strlen(buf), 0);
+	sprintf(buf, "</BODY></HTML>\r\n");
+	send(connfd, buf, strlen(buf), 0);
+}
+
+// This function process the request send by client (GET)
+void web_request(int connfd, pthread_t tid){
 	int rc, fd;
 	ssize_t nread;
 	struct stat *buf;
@@ -123,70 +198,85 @@ void web_request(int connfd){
 	int parse_value;
 	
 	// TODO Modify the image with image magick and control cache
-	// TODO persistance of HTTP 1.1 (insert cycle for(;;))
-	printf("Leggo\n");
-	nread = readn(connfd, req, MAX_BUF);
-	
-	if (nread == -1){
-		perror("Error in read\n");
-		return;
-	}
-	
-	if (nread == 0){
+	while(1){
+		memset((void *)&path, 0, sizeof(path));
+		nread = readn(connfd, req, MAX_BUF);
+		
+		if (nread == -1){
+			perror("Error in read\n");
+			return;
+		}
+		
+		if (nread == 0){
 			printf("Client close its connection\n");
 			return;
-	}
-	
-	printf("Letto\n");
-	parse_value = parse_request(req, path);
-	if(parse_value == 1){
-		// the first page showed to user
-		fd = open("/home/christian/index.html", O_RDONLY);
-		if (fd == -1){
-			perror("Error in open");
-			return;
 		}
-	}	
-	else{
-		fd = open(path, O_RDONLY);
-		if (fd == -1){
-			perror("Error in open");
-			return;
-		}
-	}
-	
-	// alloc memory for stat structure
-	buf = (struct stat *)malloc(sizeof(struct stat));
-	if (buf == NULL){
-		perror("Error in malloc");
-		return;
-	}
-			
-	// take the information of the file
-	if (fstat(fd, buf) == -1){
-		perror("Error in stat");
-		return;
-	}
 		
-			
-	// write the file in the socket
-	rc = sendfile(connfd, fd, NULL, buf->st_size);
+		parse_value = parse_request(req, path);
+		printf("File requested: %s\n", path);
+		if(parse_value == 1){
+			// the first page showed to user
+			fd = open("/home/christian/index.html", O_RDONLY);
+			if (fd == -1){
+				perror("Error in open");
+				not_found(connfd);
+				return;
+			}
+		}	
+		else{
+			fd = open(path, O_RDONLY);
+			if (fd == -1){
+				perror("Error in open");
+				not_found(connfd);
+				return;
+			}
+		}
+		
+		// alloc memory for stat structure
+		buf = (struct stat *)malloc(sizeof(struct stat));
+		if (buf == NULL){
+			perror("Error in malloc");
+			internal_error(connfd);
+			return;
+		}
+				
+		// take the information of the file
+		if (fstat(fd, buf) == -1){
+			perror("Error in stat");
+			internal_error(connfd);
+			return;
+		}
+		
+		int i;
+		if (strlen(path) > 1){
+			i = 1;
+		}
+		
+		else{
+			i = 0;
+		}
+		header_successful(connfd, i, buf->st_size);		
+		// write the file in the socket
+		rc = sendfile(connfd, fd, NULL, buf->st_size);
+		printf("Served by %u: ", (unsigned int)tid);
 
-	// error in write
-	if (rc == -1){
-		perror("Error in sendfile");
-		return;
-	}
+		// error in write
+		if (rc == -1){
+			perror("Error in sendfile");
+			internal_error(connfd);
+			return;
+		}
 
-	// incomplete transfer
-	if (rc != buf->st_size){
-		perror("Incomplete transfer");
-		return;
-	}	
-	printf("File inviato\n");	
-	if (close(fd) == -1){
-		perror("Error in close");
-		pthread_exit(NULL);
+		// incomplete transfer
+		if (rc != buf->st_size){
+			perror("Incomplete transfer");
+			return;
+		}	
+		printf("File inviato\n");	
+		if (close(fd) == -1){
+			perror("Error in close");
+			pthread_exit(NULL);
+		}
 	}
 }
 
@@ -208,7 +298,7 @@ void *handle_conn(void *p){
 				pthread_exit(NULL);
 			}
 		}
-		fprintf(stderr, "Wake up\n");
+		printf("Wake up thread %u\n", (unsigned int)pthread_self());
 		thread->fd = queue[get]; // take the first connection socket on list
 		if (++get == MAX_THREAD){
 			get = 0;
@@ -218,11 +308,11 @@ void *handle_conn(void *p){
 
 		// TODO work thread
 		fprintf(stderr, "Start work\n");
-		web_request(thread->fd);
-		fprintf(stderr, "End work\n");
+		web_request(thread->fd, thread->tid);
+		fprintf(stderr, "End work\n");		
 		
-		// close connection socket
-		if (close(thread->fd) == -1){
+		printf("Close\n");
+		if(close(thread->fd) == -1){
 			perror("Error in close");
 			pthread_exit(NULL);
 		}
@@ -294,16 +384,17 @@ int main(void)
 			perror("Error in accept");
 			return EXIT_FAILURE;
 		}
-		/*
+		
+		
 		// set a structure timeval for manage socket blocking
 		struct timeval tv;
-		tv.tv_sec = 2; 
+		tv.tv_sec = 20; 
 		tv.tv_usec = 0;
 		// set socket option in read
 		if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO,(char *)&tv,sizeof(struct timeval)) < 0){
 			perror("Error in set socket options\n");
 			return EXIT_FAILURE;
-		}*/
+		}
 
 		mutex_lock(&queue_mtx); // protect queue
 		

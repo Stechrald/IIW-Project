@@ -25,7 +25,6 @@
 void logger(int type_info, char *str1, char *str2, int i);
 void show_error(int connfd,char *strTitle, char *strBody, char *strError);
 
-
 // struct that contains many information of thread
 struct thread_struct{
 	pthread_t tid; // thread id
@@ -252,7 +251,9 @@ void head_request(int connfd){
 
 void show_error(int connfd,char *strTitle, char *strBody, char *strError){
 	char buf[MAX_BUF];
-	strcpy(buf, "HTTP/1.1 " + strError + " \r\n");
+	strcpy(buf, "HTTP/1.1 ");
+	strcat(buf,strError);
+	strcat(buf," \r\n");
 	send(connfd, buf, strlen(buf), 0);
 	strcpy(buf, SERVER_STRING);
 	send(connfd, buf, strlen(buf), 0);
@@ -261,9 +262,12 @@ void show_error(int connfd,char *strTitle, char *strBody, char *strError){
 	strcpy(buf, "\r\n");
 	send(connfd, buf, strlen(buf), 0);
 	
-	strcpy(buf, "<HTML><TITLE>" + strTitle + "</TITLE>\r\n");
+	strcpy(buf, "<HTML><TITLE>");
+	strcat(buf,strTitle);
+	strcat(buf,"</TITLE>\r\n")
 	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "<BODY><P>" + strBody);
+	strcpy(buf, "<BODY><P>");
+	strcat(buf,strBody);
 	send(connfd, buf, strlen(buf), 0);
 	strcpy(buf, "</P></BODY></HTML>\r\n");
 	send(connfd, buf, strlen(buf), 0);

@@ -248,10 +248,9 @@ void head_request(int connfd){
 /* This function send 404 error code to client,
  * because the request file is not found */
 
-void not_found(int connfd){
+void show_error(int connfd,char *strTitle, char *strBody, char *strError){
 	char buf[MAX_BUF];
-
-	strcpy(buf, "HTTP/1.1 404 \r\n");
+	strcpy(buf, "HTTP/1.1 " + strError + " \r\n");
 	send(connfd, buf, strlen(buf), 0);
 	strcpy(buf, SERVER_STRING);
 	send(connfd, buf, strlen(buf), 0);
@@ -259,62 +258,12 @@ void not_found(int connfd){
 	send(connfd, buf, strlen(buf), 0);
 	strcpy(buf, "\r\n");
 	send(connfd, buf, strlen(buf), 0);
-
-	strcpy(buf, "<HTML><TITLE>Not Found</TITLE>\r\n");
+	
+	strcpy(buf, "<HTML><TITLE>" + strTitle + "</TITLE>\r\n");
 	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "<BODY><P>The server could not fulfill\r\n");
+	strcpy(buf, "<BODY><P>" + strBody);
 	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "your request because the resource specified\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "is unavailable or nonexistent.\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "</BODY></HTML>\r\n");
-	send(connfd, buf, strlen(buf), 0);
-}
-
-/* This function send 500 error code to client, 
- * because an internal error occurred */
-
-void internal_error(int connfd){
-	char buf[MAX_BUF];
-
-	strcpy(buf, "HTTP/1.1 500 \r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, SERVER_STRING);
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "Content-Type: text/html\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "\r\n");
-	send(connfd, buf, strlen(buf), 0);
-
-	strcpy(buf, "<HTML><TITLE>Internal Server Error</TITLE>\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "<BODY><P>An internal server error occurred!</P>\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "</BODY></HTML>\r\n");
-	send(connfd, buf, strlen(buf), 0);
-}
-
-/* This function send 501 error code to client, 
- * because it has requested a method that is not implemented in the server */
-
-void not_implemented(int connfd){
-	char buf[MAX_BUF];
-
-	strcpy(buf, "HTTP/1.1 501 \r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, SERVER_STRING);
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "Content-Type: text/html\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "\r\n");
-	send(connfd, buf, strlen(buf), 0);
-
-	strcpy(buf, "<HTML><TITLE>Not Implemented</TITLE>\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "<BODY><P>This method is not supported by the server</P>\r\n");
-	send(connfd, buf, strlen(buf), 0);
-	strcpy(buf, "</BODY></HTML>\r\n");
+	strcpy(buf, "</P></BODY></HTML>\r\n");
 	send(connfd, buf, strlen(buf), 0);
 }
 
@@ -328,14 +277,14 @@ void send_request_file(int connfd, int fd, char *path, pthread_t tid){
 	buf = (struct stat *)malloc(sizeof(struct stat));
 	if (buf == NULL){
 		logger(INTERNAL_ERROR, "Server", "Error in allocation memory for file statistic structure", (int)getpid());
-		internal_error(connfd);
+		show_error(connfd, "Internal Server Error", "An internal server error occurred!","500");
 		return;
 	}
 			
 	// take the information of the file
 	if (fstat(fd, buf) == -1){
 		logger(INTERNAL_ERROR, "Server", "Error in fstat function for obtain file statistic", (int)getpid());
-		internal_error(connfd);
+		show_error(connfd, "Internal Server Error", "An internal server error occurred!","500");
 		return;
 	}
 		
@@ -407,7 +356,7 @@ void web_request(int connfd, pthread_t tid){
 				fd = open("/home/christian/index.html", O_RDONLY);
 				if (fd == -1){
 					logger(NOT_FOUND, "Server", "404 error code, file not found", (int)getpid());
-					not_found(connfd);
+					show_error(connfd,"Not Found","The server could not fulfill your request because the resource specified is unavailable or nonexistent.", "404");
 					return;
 				}
 			}	
@@ -415,7 +364,7 @@ void web_request(int connfd, pthread_t tid){
 				fd = open(path, O_RDONLY);
 				if (fd == -1){
 					logger(NOT_FOUND, "Server", "404 error code, file not found", (int)getpid());
-					not_found(connfd);
+					show_error(connfd,"Not Found","The server could not fulfill your request because the resource specified is unavailable or nonexistent.", "404");
 					return;
 				}
 			}
@@ -433,7 +382,7 @@ void web_request(int connfd, pthread_t tid){
 		else{
 			// send a server error to client
 			logger(NOT_IMPLEMENTED, "Server", "501 error code, method not implemented", (int)getpid());
-			not_implemented(connfd);
+			show_error(connfd,"Not Implemented","This method is not supported by the server","501");
 			return;
 		}
 		

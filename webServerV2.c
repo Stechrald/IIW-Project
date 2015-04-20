@@ -23,6 +23,8 @@
 #define NOT_IMPLEMENTED 501
 
 void logger(int type_info, char *str1, char *str2, int i);
+void show_error(int connfd,char *strTitle, char *strBody, char *strError);
+
 
 // struct that contains many information of thread
 struct thread_struct{

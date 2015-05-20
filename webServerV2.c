@@ -11,6 +11,8 @@
 #include <pthread.h>
 #include <sys/sendfile.h>
 #include <sys/time.h>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
 
 #define MAX_THREAD 2
 #define PORT 80
@@ -25,6 +27,7 @@
 const char *not_found = "The requested URL was not found on this server";
 const char *not_implemented = "This method is not supported by the server";
 const char *internal_error = "An internal server error occurred";
+const char *xml_path = "/home/christian/wurfl2.xml";
 
 void logger(int type_info, char *str1, char *str2, int i);
 void show_error(int connfd,char *strTitle, const char *strBody, char *strError);
@@ -46,7 +49,6 @@ int put, get; // head and tail of the queue
 
 
 /* This function calculates the correct time, formatted for logging routine */
-
 char *now(void)
 {
 	char *buff;
@@ -66,13 +68,13 @@ char *now(void)
 	return buff;
 }
 
+
 /* This function implements the logging service and writes into a log file the most important operations:
  * - LOG_INFO: all correct operations
  * - NOT_FOUND: an operation that has requested a not present file
  * - NOT_IMPLEMENTED: an operation that has requested a non supported method
  * - INTERNAL_ERROR: an operation that has generated an internal error 
  * - OTHER: other internal errors that not concern client requests */
-
 void logger(int type_info, char *str1, char *str2, int i){
 	char log_buf[MAX_BUF*2];
 	int fd;
@@ -142,7 +144,6 @@ ssize_t readn(int fd, void *buf, size_t n)
 /* This function initializes the most important resources of server,
  * like thread structure or queue for connection management. 
  * Note that synchronization resources as mutex and condition are initialized in a static way */
-
 void initialize_resource(void){
 
 	// threads array initializzation
@@ -165,6 +166,7 @@ void initialize_resource(void){
 	// end queue initialization
 }
 
+
 /* This function locks a mutex to protect an area of memory shared between threads */
 void mutex_lock(pthread_mutex_t *mutex){
 	if (pthread_mutex_lock(mutex) != 0){
@@ -172,6 +174,7 @@ void mutex_lock(pthread_mutex_t *mutex){
 		exit(EXIT_FAILURE);
 	}
 }
+
 
 /* This function release a mutex */
 void mutex_unlock(pthread_mutex_t *mutex){
@@ -181,9 +184,9 @@ void mutex_unlock(pthread_mutex_t *mutex){
 	}
 }
 
+
 /* This function parses the client request; 
  * it finds requested method and file path*/
-
 int parse_request(char *req, char *path, char *type){
 	int i = 0;
 	int j = 0;
@@ -207,9 +210,9 @@ int parse_request(char *req, char *path, char *type){
 	return j;
 }
 
+
 /* This function sends the 200 success code to client,
  * because its request was successfully fulfilled. Sends header to client */
-
 void header_successful(int connfd, int i, ssize_t size){
 	char buf[MAX_BUF];
 
@@ -234,9 +237,9 @@ void header_successful(int connfd, int i, ssize_t size){
 	send(connfd, buf, strlen(buf), 0);
 }
 
+
 /* This function sends only the header to the client,
  * in response to a HEAD request */
-
 void head_request(int connfd){
 	char buf[MAX_BUF];
 
@@ -250,10 +253,9 @@ void head_request(int connfd){
 	send(connfd, buf, strlen(buf), 0);
 }
 
+
 /* This function sends the rigth error code to the client,
  * because requested file is failed */
-
-
 void show_error(int connfd, char *strTitle, const char *strBody, char *strError){
 	char buf[MAX_BUF];
 	strcpy(buf, "HTTP/1.1 ");
@@ -278,9 +280,9 @@ void show_error(int connfd, char *strTitle, const char *strBody, char *strError)
 	send(connfd, buf, strlen(buf), 0);
 }
 
-/* This function sends the requested file to the client using "sendfile" procedure */
 
-void send_request_file(int connfd, int fd, char *path, pthread_t tid){
+/* This function sends the requested file to the client using "sendfile" procedure */
+void send_request_file(int connfd, int fd, char *path){
 	struct stat *buf;
 	int rc;	
 	
@@ -311,7 +313,6 @@ void send_request_file(int connfd, int fd, char *path, pthread_t tid){
 	header_successful(connfd, i, buf->st_size);		
 	// write the file in the socket
 	rc = sendfile(connfd, fd, NULL, buf->st_size);
-	printf("Served by %u: ", (unsigned int)tid);
 
 	// if errors occured during write procedure
 	if (rc == -1){
@@ -329,14 +330,86 @@ void send_request_file(int connfd, int fd, char *path, pthread_t tid){
 	logger(LOG_INFO, "Server", "Successful send file", (int)getpid());	
 }
 
+
+/* This function parses the information in HTTP request; in particular it founds accept line and user-agent line */
+void parse_info(char *req, char **info, const char *object)
+{
+	int i;
+	char *ptr;
+	ptr = malloc(MAX_BUF);
+	strcpy(ptr, req); // necessario altrimenti strstr mi taglia la request
+		
+	*info = strstr(ptr, object);
+
+	for (i = 0; i < strlen(*info); ++i){
+		if ((*info)[i] == '\n'){
+			(*info)[i] = '\0';
+			break;
+		}
+	}
+	
+	for (i = 0; i < strlen(*info); ++i){
+		if ((*info)[i] == ' '){
+			*info = *info + i + 1;
+			break;
+		}
+	}
+	return;
+}
+
+
+void parse_xmlfile(char *user_agent, int *h, int *w, xmlNodePtr root){
+	xmlNodePtr cur, cur2;
+	xmlChar *height;
+	xmlChar *width;
+		
+	for (cur = root; cur; cur = cur->next){		
+		if (cur->type == XML_ELEMENT_NODE && !xmlStrcmp(cur->name, (const xmlChar *)"group") && !xmlStrcmp(xmlGetProp(cur,(const xmlChar*) "id"), (const xmlChar *)"display")){	
+			char *agent = (char *)xmlGetProp(cur->parent,(const xmlChar*) "user_agent");
+			if (strcmp(user_agent, agent) == 0){				
+				
+				for (cur2 = cur->children; cur2; cur2 = cur2->next) {
+							
+					if(!xmlStrcmp(xmlGetProp(cur2,(const xmlChar*) "name"), (const xmlChar *)"resolution_height"))	
+						height = xmlGetProp(cur2,(const xmlChar*) "value"); 				
+					if(!xmlStrcmp(xmlGetProp(cur2,(const xmlChar*) "name"), (const xmlChar *)"resolution_width"))  
+           	 			width = xmlGetProp(cur2,(const xmlChar*) "value"); 	
+				}
+				*w = atoi((char *)width);
+				*h = atoi((char *)height);
+				
+				return;
+			}		
+		}
+		parse_xmlfile(user_agent, h, w, cur->children);
+	}
+	
+}
+
+
 /* This function parses and processes the request send by the client to check the right method to call */
-void web_request(int connfd, pthread_t tid){
+void web_request(int connfd){
 	int fd;
 	ssize_t nread;
 	char req[MAX_BUF];
 	char path[MAX_BUF];
+	char *user_agent;
+	char *accept;
 	int parse_value;
 	char type[4];
+	int height, width;
+	
+	user_agent = malloc(MAX_BUF);
+	if (user_agent == NULL){
+		perror("error in malloc");
+		return;
+	}
+	
+	accept = malloc(MAX_BUF);
+	if (accept == NULL){
+		perror("error in malloc");
+		return;
+	}
 	
 	// TODO Modify the image with image magick and control cache
 	while(1){
@@ -354,11 +427,39 @@ void web_request(int connfd, pthread_t tid){
 			printf("Client close its connection\n");
 			return;
 		}
+		// parse informations in HTTP request (accept, user-agent)
+		parse_info(req, &accept, "Accept");
+		parse_info(req, &user_agent, "User-Agent");
 		
 		// parse client request
 		parse_value = parse_request(req, path, type);
-		printf("HTTP Method: %s\n", type);
-		printf("File requested: %s\n", path);
+		
+		//printf("HTTP Method: %s\n", type);
+		//printf("File requested: %s\n", path);
+		
+		xmlDocPtr doc;
+		xmlNodePtr cur;
+
+		doc = xmlParseFile(xml_path);
+		if (doc == NULL ) {
+			fprintf(stderr,"Document not parsed successfully. \n");
+			return;
+		}
+		
+		cur = xmlDocGetRootElement(doc);
+		
+		if (cur == NULL) {
+			fprintf(stderr,"empty document\n");
+			xmlFreeDoc(doc);
+			return;
+		}
+		user_agent[strlen(user_agent)-1] = '\0';
+		printf("%s\n", user_agent);
+		
+		parse_xmlfile(user_agent, &height, &width, cur);
+		printf("%d %d\n", height, width);
+		
+	
 		
 		// verifies that the request is a GET request
 		if (strcmp(type, "GET") == 0){
@@ -398,7 +499,7 @@ void web_request(int connfd, pthread_t tid){
 		}
 		
 		// sends file to client
-		send_request_file(connfd, fd, path, tid);
+		send_request_file(connfd, fd, path);
 		
 		if (close(fd) == -1){
 			logger(SYSTEM_ERR, "Server", "Close file failed", (int)getpid());
@@ -406,6 +507,7 @@ void web_request(int connfd, pthread_t tid){
 		}
 	}
 }
+
 
 /* This function is the starting point for newly generated threads (created by the main thread)
  * here a thread takes its first connection socket if queue is not empty; 
@@ -425,7 +527,7 @@ void *handle_conn(void *p){
 				pthread_exit(NULL);
 			}
 		}
-		printf("Wake up thread %u\n", (unsigned int)pthread_self());
+		printf("Wake up thread\n");
 		thread->fd = queue[get]; // take the first connection socket on the list
 		if (++get == MAX_THREAD){
 			get = 0;
@@ -435,7 +537,7 @@ void *handle_conn(void *p){
 
 		// TODO work thread
 		fprintf(stderr, "Start work\n");
-		web_request(thread->fd, thread->tid);
+		web_request(thread->fd);
 		fprintf(stderr, "End work\n");		
 		
 		printf("Close\n");
@@ -470,6 +572,7 @@ void make_threads(void){
 	}
 }
 
+
 int start_server(void){
 	int sockfd;
 	struct sockaddr_in addr;
@@ -501,6 +604,7 @@ int start_server(void){
 	
 	return sockfd;
 }
+
 
 int main(void)
 {

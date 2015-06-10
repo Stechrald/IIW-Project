@@ -29,6 +29,8 @@ const char *not_found = "The requested URL was not found on this server";
 const char *not_implemented = "This method is not supported by the server";
 const char *internal_error = "An internal server error occurred";
 const char *xml_path = "/home/christian/wurfl2.xml";
+const char *cache_path = "/home/christian/cache";
+const char *priority_file = "/home/christian/cache/priority.txt";
 
 void logger(int type_info, char *str1, char *str2, int i);
 void show_error(int connfd,char *strTitle, const char *strBody, char *strError);
@@ -391,6 +393,98 @@ void parse_xmlfile(char *user_agent, int *h, int *w, xmlNodePtr root){
 }
 
 
+char *access_cache(char *path, int h, int w){
+	char *image_name = path + 32;
+	int fd;
+	
+	// ACCESSO ESCLUSIVO
+	fd = open(priority_file, O_RDONLY);
+	if (fd == -1){
+		perror("Error in open");
+		exit(EXIT_FAILURE);
+	}
+	
+	return NULL;
+}
+
+
+void insert_cache(char *path, int height, int width){
+	int fd_from;
+	int fd_to;
+	int fd_priority;
+	char new_path[MAX_BUF];
+	char buf[MAX_BUF];
+	ssize_t nread;
+	
+	fd_from = open(path, O_RDONLY);
+	if (fd_from == -1){
+		perror("Error in open");
+		exit(EXIT_FAILURE);
+	}
+	memset(new_path, 0, strlen(new_path));
+	strcat(new_path, cache_path);
+	strcat(new_path, "/");
+	strcat(new_path, path + 32);
+
+	fd_to = open(new_path, O_WRONLY|O_CREAT);
+	printf("NEW PATH: %s\n", new_path);
+	if (fd_to == -1){
+		perror("Error in open");
+		exit(EXIT_FAILURE);
+	}
+	while ((nread = read(fd_from, buf, sizeof(buf))) > 0){
+		char *out_ptr = buf;
+		ssize_t nwritten;
+		
+		do{
+			nwritten = write(fd_to, out_ptr, nread);
+			
+			if (nwritten > 0){
+				nread -= nwritten;
+				out_ptr += nwritten;
+			}
+		} while (nread > 0);
+	}
+	
+	if (close(fd_from) == -1){
+		perror("Error in close");
+		exit(EXIT_FAILURE);
+	}
+	
+	if (close(fd_to) == -1){
+		perror("Error in close");
+		exit(EXIT_FAILURE);
+	}
+	
+	fd_priority = open(priority_file, O_WRONLY|O_APPEND, 0777);
+	if (fd_priority == -1){
+		perror("Error in open");
+		exit(EXIT_FAILURE);
+	}
+	
+	char str[MAX_BUF];
+	memset(new_path, 0, strlen(new_path));
+	strcat(new_path, path+32);
+	strcat(new_path, ";");
+	sprintf(str, "%d" ,height);
+	strcat(new_path, str);
+	strcat(new_path, ";");
+	sprintf(str, "%d" ,width);
+	strcat(new_path, str);
+	strcat(new_path, "\n");
+	
+	if (write(fd_priority, new_path, sizeof(new_path)) != sizeof(new_path)){
+		perror("Error in write");
+		exit(EXIT_FAILURE);
+	}
+	
+	if (close(fd_priority) == -1){
+		perror("Error in close");
+		exit(EXIT_FAILURE);
+	}
+}
+
+
 /* This function parses and processes the request send by the client to check the right method to call */
 void web_request(int connfd){
 	int fd;
@@ -403,6 +497,7 @@ void web_request(int connfd){
 	char type[4];
 	int height, width;
 	
+		
 	user_agent = malloc(MAX_BUF);
 	if (user_agent == NULL){
 		perror("error in malloc");
@@ -431,10 +526,10 @@ void web_request(int connfd){
 			printf("Client close its connection\n");
 			return;
 		}
+		
 		// parse informations in HTTP request (accept, user-agent)
 		parse_info(req, &accept, "Accept");
 		parse_info(req, &user_agent, "User-Agent");
-		
 		// parse client request
 		parse_value = parse_request(req, path, type);
 		
@@ -481,6 +576,12 @@ void web_request(int connfd){
 				}
 			}	
 			else{
+				char *image_name;
+				image_name = access_cache(path, height, width);
+				if (image_name == NULL){
+					// IMAGE MAGICK ---> QUI
+					insert_cache(path, height, width);
+				}
 				fd = open(path, O_RDONLY);
 				if (fd == -1){
 					logger(NOT_FOUND, "Server", "404 error code, file not found", (int)getpid());

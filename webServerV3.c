@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
+#include <wand/MagickWand.h>
 
 #define MAX_THREAD 128 // power of 2
 #define MIN_THREAD 4
@@ -224,8 +225,13 @@ void header_successful(int connfd, int i, ssize_t size){
 
 	strcpy(buf, "HTTP/1.1 200 OK\r\n");
 	send(connfd, buf, strlen(buf), 0);
+	memset(buf, 0, sizeof(buf));
 	strcpy(buf, SERVER_STRING);
-	send(connfd, buf, strlen(buf), 0);
+	// TODO causa crash
+	if(send(connfd, buf, strlen(buf), 0) < 0){
+		perror("error in send");
+		pthread_exit(NULL);
+	}
 	// Content_Lenght FUNDAMENTAL FOR PERSISTENCY IMPLEMENTATION AND CLIENT LOCK AVOIDANCE DURING READING ROUTINE
 	sprintf(buf, "Content-Length: %d\r\n", (int)size); // uses sprintf to insert size param
 	send(connfd, buf, strlen(buf), 0);
@@ -306,20 +312,18 @@ void send_request_file(int connfd, int fd, char *path){
 		show_error(connfd, "Internal Server Error", internal_error,"500");
 		return;
 	}
-		
+	
 	int i;
 	if (strlen(path) > 1){
 		i = 1;
 	}
-	
 	else{
 		i = 0;
 	}
 	// sends header HTTP to client
-	header_successful(connfd, i, buf->st_size);		
+	header_successful(connfd, i, buf->st_size);	// TODO causa crash	
 	// write the file in the socket
 	rc = sendfile(connfd, fd, NULL, buf->st_size);
-
 	// if errors occured during write procedure
 	if (rc == -1){
 		logger(INTERNAL_ERROR, "Server", "Error in write file to socket", (int)getpid());
@@ -394,7 +398,7 @@ void parse_xmlfile(char *user_agent, int *h, int *w, xmlNodePtr root){
 
 
 char *access_cache(char *path, int h, int w){
-	char *image_name = path + 32;
+	//char *image_name = path + 32;
 	int fd;
 	
 	// ACCESSO ESCLUSIVO
@@ -407,54 +411,58 @@ char *access_cache(char *path, int h, int w){
 	return NULL;
 }
 
+void insert_resized(char *path, int q, int wid, int hei, char *cache) {
+		
+	MagickWand *wand = NULL;
+	MagickWandGenesis();
+	
+	wand = NewMagickWand();
+	if (MagickReadImage(wand, path) == MagickFalse) {
+		perror("error in read");
+		// LOGGER
+		DestroyMagickWand(wand);
+		MagickWandTerminus();
+		pthread_exit(NULL);
+	}
+	
+	if (MagickResizeImage(wand, wid, hei, LanczosFilter, 1) == 0) {
+		perror("error in resize");
+		// LOGGER
+		DestroyMagickWand(wand);
+		MagickWandTerminus();
+		pthread_exit(NULL);
+	}
+	if (MagickSetImageCompressionQuality(wand, q) == 0) {
+		perror("error in compression");
+		// LOGGER
+		DestroyMagickWand(wand);
+		MagickWandTerminus();
+		pthread_exit(NULL);
+	}
+	
+	if (MagickWriteImage(wand, cache) == 0) {
+		perror("error in write");
+		// LOGGER
+		DestroyMagickWand(wand);
+		MagickWandTerminus();
+		pthread_exit(NULL);
+	}
+	
+	DestroyMagickWand(wand);
+	MagickWandTerminus();		
+}
 
 void insert_cache(char *path, int height, int width){
-	int fd_from;
-	int fd_to;
 	int fd_priority;
 	char new_path[MAX_BUF];
-	char buf[MAX_BUF];
-	ssize_t nread;
 	
-	fd_from = open(path, O_RDONLY);
-	if (fd_from == -1){
-		perror("Error in open");
-		exit(EXIT_FAILURE);
-	}
 	memset(new_path, 0, strlen(new_path));
 	strcat(new_path, cache_path);
 	strcat(new_path, "/");
 	strcat(new_path, path + 32);
-
-	fd_to = open(new_path, O_WRONLY|O_CREAT);
-	printf("NEW PATH: %s\n", new_path);
-	if (fd_to == -1){
-		perror("Error in open");
-		exit(EXIT_FAILURE);
-	}
-	while ((nread = read(fd_from, buf, sizeof(buf))) > 0){
-		char *out_ptr = buf;
-		ssize_t nwritten;
-		
-		do{
-			nwritten = write(fd_to, out_ptr, nread);
-			
-			if (nwritten > 0){
-				nread -= nwritten;
-				out_ptr += nwritten;
-			}
-		} while (nread > 0);
-	}
 	
-	if (close(fd_from) == -1){
-		perror("Error in close");
-		exit(EXIT_FAILURE);
-	}
-	
-	if (close(fd_to) == -1){
-		perror("Error in close");
-		exit(EXIT_FAILURE);
-	}
+	int q = 95;
+	insert_resized(path, q, width, height, new_path);
 	
 	fd_priority = open(priority_file, O_WRONLY|O_APPEND, 0777);
 	if (fd_priority == -1){
@@ -473,7 +481,7 @@ void insert_cache(char *path, int height, int width){
 	strcat(new_path, str);
 	strcat(new_path, "\n");
 	
-	if (write(fd_priority, new_path, sizeof(new_path)) != sizeof(new_path)){
+	if (write(fd_priority, new_path, strlen(new_path)) != strlen(new_path)){
 		perror("Error in write");
 		exit(EXIT_FAILURE);
 	}
@@ -553,6 +561,8 @@ void web_request(int connfd){
 			return;
 		}
 		user_agent[strlen(user_agent)-1] = '\0';
+		accept[strlen(accept)-1] = '\0';
+		printf("%s\n", accept);
 		printf("%s\n", user_agent);
 		
 		parse_xmlfile(user_agent, &height, &width, cur);
@@ -561,9 +571,7 @@ void web_request(int connfd){
 			width = 800;
 		}
 		printf("%d %d\n", height, width);
-		
-	
-		
+			
 		// verifies that the request is a GET request
 		if (strcmp(type, "GET") == 0){
 			if (parse_value == 1){
@@ -577,6 +585,9 @@ void web_request(int connfd){
 			}	
 			else{
 				char *image_name;
+				if (strcmp(path, "/home/christian/favicon.ico") == 0){
+					return;
+				}
 				image_name = access_cache(path, height, width);
 				if (image_name == NULL){
 					// IMAGE MAGICK ---> QUI
@@ -608,7 +619,7 @@ void web_request(int connfd){
 		}
 		
 		// sends file to client
-		send_request_file(connfd, fd, path);
+		send_request_file(connfd, fd, path);  // TODO causa crash
 		
 		if (close(fd) == -1){
 			logger(SYSTEM_ERR, "Server", "Close file failed", (int)getpid());

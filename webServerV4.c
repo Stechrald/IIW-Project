@@ -478,7 +478,7 @@ void insert_cache(char *path, int height, int width){
 	sprintf(str, "%d" ,width);
 	strcat(new_path, str);
 	strcat(new_path, "\n");
-	printf("String length: %u", strlen(new_path)); //controlliamo la lunghezza effettiva della stringa, se è 1024 il problema sono i NUL char
+	printf("String length: %d", (int)strlen(new_path)); //controlliamo la lunghezza effettiva della stringa, se è 1024 il problema sono i NUL char
 	
 	if (write(fd_priority, new_path, strlen(new_path)) != strlen(new_path)){
 		perror("Error in write");

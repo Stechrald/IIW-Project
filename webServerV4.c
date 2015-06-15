@@ -283,10 +283,13 @@ void show_error(int connfd, char *strTitle, const char *strBody, char *strError)
 	strcat(buf, strTitle);
 	strcat(buf, "</TITLE>\r\n");
 	send(connfd, buf, strlen(buf), MSG_NOSIGNAL);
-	strcpy(buf, "<BODY><P>");
+	strcpy(buf, "<BODY><DIV style=\"position:relative\"><TABLE align=\"center\" style=\"margin-top:50px\"><TR><TD style=\"width:50%\"><H1>Ooops..</H1><P>");
+	send(connfd, buf, strlen(buf), MSG_NOSIGNAL);
+	strcpy(buf,strError)
+	strcat(buf,".That's an error </P><P>")
 	strcat(buf, strBody);
 	send(connfd, buf, strlen(buf), MSG_NOSIGNAL);
-	strcpy(buf, "</P></BODY></HTML>\r\n");
+	strcpy(buf, "</TD><TD><IMG src=\"src/server_error.png\" alt=\"Error\" style=\"height: 261px; width: 325px\" /></TD></TR></TABLE></DIV></BODY></HTML>\r\n");
 	send(connfd, buf, strlen(buf), MSG_NOSIGNAL);
 }
 

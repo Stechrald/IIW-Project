@@ -42,8 +42,8 @@ void show_error(int connfd,char *strTitle, const char *strBody, char *strError);
 struct thread_struct{
 	pthread_t tid; // thread id
 	int fd; // managed connection file descriptor
-	int pos;
-	int canc;
+	int pos; // position of thread in array
+	int canc; // flag for thread cancellation
 };
 
 pthread_cond_t cond_queue = PTHREAD_COND_INITIALIZER; // conditon for queue, static initialization
@@ -52,10 +52,10 @@ pthread_mutex_t image_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 struct thread_struct *threads; // threads array
 
-int *queue;
+int *queue; // queue of socket fd
 int i = 0; // number of working threads
 int free_t = 0; // index of first free thread
-int curr = MIN_THREAD; 
+int curr = MIN_THREAD; // current number of max threads
 int put, get; // head and tail of the queue
 
 
@@ -376,35 +376,6 @@ void parse_info(char *req, char **info, const char *object)
 }
 
 
-void parse_xmlfile(char *user_agent, int *h, int *w, xmlNodePtr root){
-	xmlNodePtr cur, cur2;
-	xmlChar *height;
-	xmlChar *width;
-		
-	for (cur = root; cur; cur = cur->next){		
-		if (cur->type == XML_ELEMENT_NODE && !xmlStrcmp(cur->name, (const xmlChar *)"group") && !xmlStrcmp(xmlGetProp(cur,(const xmlChar*) "id"), (const xmlChar *)"display")){	
-			char *agent = (char *)xmlGetProp(cur->parent,(const xmlChar*) "user_agent");
-			if (strcmp(user_agent, agent) == 0){				
-				
-				for (cur2 = cur->children; cur2; cur2 = cur2->next) {
-							
-					if(!xmlStrcmp(xmlGetProp(cur2,(const xmlChar*) "name"), (const xmlChar *)"resolution_height"))	
-						height = xmlGetProp(cur2,(const xmlChar*) "value"); 				
-					if(!xmlStrcmp(xmlGetProp(cur2,(const xmlChar*) "name"), (const xmlChar *)"resolution_width"))  
-           	 			width = xmlGetProp(cur2,(const xmlChar*) "value"); 	
-				}
-				*w = atoi((char *)width);
-				*h = atoi((char *)height);
-				
-				return;
-			}		
-		}
-		parse_xmlfile(user_agent, h, w, cur->children);
-	}
-	
-}
-
-
 char *access_cache(char *path, int h, int w){
 	//char *image_name = path + 32;
 	//int fd;
@@ -419,13 +390,18 @@ char *access_cache(char *path, int h, int w){
 	return NULL;
 }
 
+/* This function read an image from a path, resize it with width and height (passed as arguments), 
+ * and save resized image in cache folder */
 void insert_resized(char *path, int q, int wid, int hei, char *cache) {
-		
+	
+	// START MagickWand initialization
 	MagickWand *wand = NULL;
 	MagickWandGenesis();
 	
 	wand = NewMagickWand();
-	printf("PERCORSO: %s\n", path);
+	// END MagickWand initialization
+	
+	// open image in read mode
 	if (MagickReadImage(wand, path) == MagickFalse) {
 		perror("error in read");
 		// LOGGER
@@ -435,6 +411,7 @@ void insert_resized(char *path, int q, int wid, int hei, char *cache) {
 		exit(EXIT_FAILURE);
 	}
 	
+	// resize selected image
 	if (MagickResizeImage(wand, wid, hei, LanczosFilter, 1) == 0) {
 		perror("error in resize");
 		// LOGGER
@@ -443,6 +420,8 @@ void insert_resized(char *path, int q, int wid, int hei, char *cache) {
 		free(threads);
 		exit(EXIT_FAILURE);
 	}
+	
+	// set quality to image
 	if (MagickSetImageCompressionQuality(wand, q) == 0) {
 		perror("error in compression");
 		// LOGGER
@@ -452,6 +431,7 @@ void insert_resized(char *path, int q, int wid, int hei, char *cache) {
 		exit(EXIT_FAILURE);
 	}
 	
+	// open new file in write mode and create the modified image
 	if (MagickWriteImage(wand, cache) == 0) {
 		perror("error in write");
 		// LOGGER
@@ -461,32 +441,37 @@ void insert_resized(char *path, int q, int wid, int hei, char *cache) {
 		exit(EXIT_FAILURE);
 	}
 	
+	// release MagickWand
 	DestroyMagickWand(wand);
 	MagickWandTerminus();
 }
 
+/* This function insert a modified image into cache and update the priority file */
 char *insert_cache(char *path, int height, int width){
 	int fd_priority;
 	char new_path[MAX_BUF];
 	char *image_name;
 	
+	// START create new path (cache path)
 	memset(new_path, 0, strlen(new_path));
 	strcat(new_path, cache_path);
 	strcat(new_path, "/");
 	strcat(new_path, path + 32);
+	// END create new path (cache path)
 	
-	int q = 95;
-	insert_resized(path, q, width, height, new_path);
+	int q = 95; // TODO take quality from HTTP request
+	insert_resized(path, q, width, height, new_path); // resize image and insert it into cache
 	
-	fd_priority = open(priority_file, O_CREAT|O_WRONLY|O_APPEND, 0777);
+	// open priority file in write mode or create if not exists
+	fd_priority = open(priority_file, O_CREAT|O_WRONLY|O_APPEND, 0777); 
 	if (fd_priority == -1){
 		perror("Error in open");
 		free(threads);
 		exit(EXIT_FAILURE);
 	}
-	//memset(new_path, 0, strlen(new_path));
 	
-	//mutex_lock(&image_mtx);
+	
+	// START write procedure in priority file
 	if (write(fd_priority, path+32, strlen(path+32)) != (int) strlen(path+32)){
 		perror("Error in write");
 		free(threads);
@@ -531,7 +516,7 @@ char *insert_cache(char *path, int height, int width){
 		exit(EXIT_FAILURE);
 	}
 	//write newline
-	//mutex_unlock(&image_mtx);
+	// END write procedure in priority file
 	
 	if (close(fd_priority) == -1){
 		perror("Error in close");
@@ -543,75 +528,77 @@ char *insert_cache(char *path, int height, int width){
 	return image_name;
 }
 
-MYSQL db_connect(void){
+/* This function tries to connect her to MYSQL Database */
+MYSQL *db_connect(void){
 
+ 	// credentials for db connection
  	const char* host = "localhost"; 
 	const char* database = "wurfl"; 
 	const char* db_user = "root"; 
 	const char* db_pass = "asroma93"; 
-    MYSQL mysql;
+    
+    MYSQL *mysql = mysql_init(NULL);
 
-    // restituisce NULL se non avviene con successo
-    if (! mysql_init (&mysql)) {
-            printf ("Errore nella allocazione di memoria.\n");
+    if (mysql == NULL) {
+            perror("Error in memory allocation");
             free(threads);
             exit (EXIT_FAILURE);
     }
 
-    if (! mysql_real_connect (&mysql, host, db_user, db_pass, "", 0, NULL, 0)) {
-            printf ("Errore nella connessione.\n");
-            free(threads);
-            exit (EXIT_FAILURE);
+    if (mysql_real_connect (mysql, host, db_user, db_pass, "", 0, NULL, 0) == NULL) {
+			perror("Error in connection");
+			return NULL;
     }
-
-    // restituisce zero se avviene con successo
-    if (mysql_select_db (&mysql, database)) {
-            printf ("Errore nella selezione del database.\n");
-            free(threads);
-            exit (EXIT_FAILURE);
+    
+    if (mysql_select_db (mysql, database)) {
+            perror("Error in database selection");
+			return NULL;
     }
-
-    printf ("Connessione avvenuta.\n");
 
 	return mysql;
 
 }
 
-void db_query(char *user, int *h, int *w){
-	MYSQL mysql;
+/* This function performs a query to local database obtaining information of device */
+int db_query(char *user, int *h, int *w){
+	MYSQL *mysql;
 	MYSQL_RES *res;
 	MYSQL_ROW row;
 	char query[MAX_BUF];
-	
+
 	mysql = db_connect();
+	if (mysql == NULL){
+		return 0;
+	}
 	sprintf(query, "SELECT height, width FROM devices WHERE user_agent LIKE '%s'", user);
 	
-	if (mysql_query(&mysql, query) != 0){
-		fprintf(stderr, "Error in mysql_query\n");
-		free(threads);
-		exit(EXIT_FAILURE);
+	// performs query
+	if (mysql_query(mysql, query) != 0){
+		perror("Error in mysql_query");
+		return 0;
 	}
 	
-	res = mysql_use_result(&mysql);
+	// take results
+	res = mysql_use_result(mysql);
 	if (res == NULL){
-		fprintf(stderr, "Error in mysql_use_result\n");
-		free(threads);
-		exit(EXIT_FAILURE);
+		perror("Error in mysql_use_result");
+		return 0;
 	}
 	
+	// take columns from result array
 	row = mysql_fetch_row(res);
 	if (row == NULL){
 		*h = *w = 0;
-		mysql_free_result(res);
-		mysql_close(&mysql);
-		return;
+		mysql_free_result(res); // release memory
+		mysql_close(mysql); // close connection
+		return 1;
 	}
 	*h = atoi(row[0]);
 	*w = atoi(row[1]);
-	printf("VALORI: %d %d\n", *h, *w);
 	
-	mysql_free_result(res);
-	mysql_close(&mysql);
+	mysql_free_result(res); // realease memory 
+	mysql_close(mysql); // close connection
+	return 1;
 }
 
 
@@ -642,7 +629,6 @@ void web_request(int connfd){
 		return;
 	}
 	
-	// TODO Modify the image with image magick and control cache
 	while(1){
 		
 		// clean path buffer
@@ -658,48 +644,25 @@ void web_request(int connfd){
 			printf("Client close its connection\n");
 			return;
 		}
+		
 		// parse informations in HTTP request (accept, user-agent)
 		parse_info(req, &accept, "Accept");
 		parse_info(req, &user_agent, "User-Agent");
+		
 		// parse client request
 		parse_value = parse_request(req, path, type);
-		//printf("HTTP Method: %s\n", type);
-		//printf("File requested: %s\n", path);
-		
-		/*xmlDocPtr doc;
-		xmlNodePtr cur;
-
-		printf("CIAO\n");
-		mutex_lock(&parser_mtx);
-		doc = xmlParseFile(xml_path);  // TODO CAUSA CRASH
-		if (doc == NULL ) {
-			fprintf(stderr,"Document not parsed successfully. \n");
-			return;
-		}
-		printf("CIAO2\n");
-		cur = xmlDocGetRootElement(doc);
-		if (cur == NULL) {
-			fprintf(stderr,"empty document\n");
-			xmlFreeDoc(doc);
-			return;
-		}
-		printf("CIAO3\n");
-		
-		parse_xmlfile(user_agent, &height, &width, cur); */
 		
 		user_agent[strlen(user_agent)-1] = '\0';
 		accept[strlen(accept)-1] = '\0';
-		/*printf("%s\n", accept);
-		printf("%s\n", user_agent);*/
-		
-		db_query(user_agent, &height, &width);
-		
+		if(db_query(user_agent, &height, &width) == 0){
+			logger(INTERNAL_ERROR, "Server", "Error in database connection", (int)getpid());
+			show_error(connfd, "Internal Server Error", internal_error,"500");
+			return;
+		}
 		if (height == 0 && width == 0){
 			height = 600;
 			width = 800;
 		}
-
-		//printf("%d %d\n", height, width);
 		
 		// verifies that the request is a GET request
 		if (strcmp(type, "GET") == 0){
@@ -713,18 +676,18 @@ void web_request(int connfd){
 				}
 			}	
 			else{
-				//printf("QUI ENTRO: %d\n", (int)pthread_self());
 				char *image_name;
 				if (strcmp(path, "/favicon.ico") == 0 || strcmp(path, "/home/christian/favicon.ico") == 0){
 					return;
 				}
+				
 				image_name = access_cache(path, height, width);
-				//printf("QUI ENTRO: %d\n", (int)pthread_self());
 				if (image_name == NULL){
-					// IMAGE MAGICK ---> QUI
+					mutex_lock(&image_mtx);
 					image_name = insert_cache(path, height, width);
+					mutex_unlock(&image_mtx);
 				}
-				//printf("QUI ENTRO: %d\n", (int)pthread_self());
+				//image_name = path;
 				fd = open(image_name, O_RDONLY);
 				if (fd == -1){
 					logger(NOT_FOUND, "Server", "404 error code, file not found", (int)getpid());
@@ -751,22 +714,14 @@ void web_request(int connfd){
 		}
 		
 		// sends file to client
-		//printf("QUI ENTRO\n");
 		send_request_file(connfd, fd, path);
-		//printf("QUI ENTRO\n"); 
-		
-		if (close(fd) == -1){
-			logger(SYSTEM_ERR, "Server", "Close file failed", (int)getpid());
-			free(threads);
-			exit(EXIT_FAILURE);
-		}
+		close(fd);
 	}
 }
 
+/* This function swap two thread structure in pool maintaining partition */
 void swap(int pos){
 	struct thread_struct temp;
-	
-	printf("THREAD: %d\n", (int)threads[pos].tid);
 	
 	temp.tid = threads[pos].tid;
 	temp.fd = threads[pos].fd;
@@ -783,7 +738,6 @@ void swap(int pos){
 	threads[free_t].pos = temp.pos;
 	threads[free_t].canc = temp.canc;
 	
-	printf("THREAD: %d\n", (int)threads[pos].tid);
 }
 
 /* This function is the starting point for newly generated threads (created by the main thread)
@@ -822,7 +776,6 @@ void *handle_conn(void *p){
 				pthread_exit(NULL);
 			}
 		}
-		printf("Wake up thread\n");
 		
 		swap(thread->pos);
 		thread->pos = free_t;
@@ -834,16 +787,9 @@ void *handle_conn(void *p){
 		}
 		++i; // busy thread	
 		mutex_unlock(&queue_mtx);
-
-		// TODO work thread
-		fprintf(stderr, "Start work\n");
 		web_request(thread->fd);
-		fprintf(stderr, "End work\n");
 		
-		printf("Close\n");
-		if(close(thread->fd) == -1){
-			logger(SYSTEM_ERR, "Server", "Close socket failed", (int)getpid());
-		}
+		close(thread->fd);
 		
 		// protected thread counter
 		mutex_lock(&queue_mtx);
@@ -878,7 +824,11 @@ void make_threads(void){
 	}
 }
 
-
+/* This function starts the server:
+ * 	- create socket
+ * 	- set address structure
+ * 	- bind
+ * 	- listen */
 int start_server(void){
 	int sockfd;
 	struct sockaddr_in addr;
@@ -914,7 +864,8 @@ int start_server(void){
 	return sockfd;
 }
 
-
+/* This function increment the pool of threads if is necessary.
+ * It produce a percent of working threads, and if it is > 0.5 then increase(double) the dimension of pool */
 void pool_increment(void){
 	float perc;
 	int j;
@@ -923,6 +874,7 @@ void pool_increment(void){
 	
 	printf("CURRENT PIPPO THREADS: %d\n", curr);
 	if (perc > 0.5){
+		// max threads
 		if (curr == MAX_THREAD){
 			printf("CURRENT PIPPO BAUDO THREADS: %d\n", curr);
 			return;
@@ -930,7 +882,7 @@ void pool_increment(void){
 		threads = realloc(threads, sizeof(struct thread_struct)*(curr*2));
 		if (threads == NULL){
 			perror("error in realloc");
-			// LOGGER
+			logger(SYSTEM_ERR, "Server", "Error in reallocatin memory", (int)getpid());
 			free(threads);
 			exit(EXIT_FAILURE);
 		}
@@ -947,6 +899,8 @@ void pool_increment(void){
 	}
 }
 
+/* This function controls, in periodic way, the number of threads in the system, and decrements its if necessary.
+ * It produce a percent of working threads in the system and if it is <= 0.25 then the control thread decrements the pool */
 void *pool_decrement(void *p){
 	p = p;
 	float perc;
@@ -956,17 +910,19 @@ void *pool_decrement(void *p){
 	for(;;){
 		usleep(1000000);
 		mutex_lock(&queue_mtx);
-		perc = free_t/(float)curr;
+		perc = free_t/(float)curr; // calculate the percent of working thread
 		if (perc <= 0.25){
-			if (curr == MIN_THREAD){
+			// not necessary a decrement
+			if (curr == MIN_THREAD){  
 				mutex_unlock(&queue_mtx);
 				continue;
 			}
 			for (j=curr/2; j<curr; ++j){
 				
-				threads[j].canc = 1;
+				threads[j].canc = 1; // set a thread as cancellable
 			}
 			
+			// send condition signal to all threads
 			if (pthread_cond_broadcast(&cond_queue) != 0){
 				perror("Error in cond_broadcast");
 				free(threads);
@@ -974,13 +930,16 @@ void *pool_decrement(void *p){
 			}
 			printf("BROADCAST\n");
 		
+			// temorary structure
 			temp = (struct thread_struct *)malloc(sizeof(struct thread_struct)*(curr/2));
 			if (temp == NULL){
 				perror("error in malloc");
-				// LOGGER
+				logger(SYSTEM_ERR, "Server", "Error in allocation memory", (int)getpid());
 				free(threads);
 				exit(EXIT_FAILURE);
 			}
+			
+			// copy all thread structure survived
 			for (j=0; j<curr/2; j++){
 					temp[j].tid = threads[j].tid;
 					temp[j].fd = threads[j].fd;
@@ -988,10 +947,9 @@ void *pool_decrement(void *p){
 					temp[j].canc = threads[j].canc;
 			}
 		
-			free(threads);
+			free(threads); // release memory
 			threads = temp;
 		
-			//threads = realloc(threads, sizeof(struct thread_struct)*(curr/2));
 			printf("REALLOCATED\n");
 
 			curr = curr/2;
@@ -1001,6 +959,8 @@ void *pool_decrement(void *p){
 	}
 }
 
+/* This function create a control thread that controls, in periodic way, the number of threads in the system
+ * and decrements them if necessary */
 void make_timer_thread(void){
 	pthread_t tid;
 	
@@ -1023,7 +983,7 @@ int main(void)
 	initialize_resource();
 	// create pool threads
 	make_threads();
-	make_timer_thread(); /******************************************/ // crea un thread di controllo
+	make_timer_thread(); // create a control thread
 
 	// manage request
 	for (;;){
@@ -1034,7 +994,7 @@ int main(void)
 		}
 		printf("WORKING THREADS: %d\n", i);
 		mutex_lock(&queue_mtx);
-		pool_increment(); /*****************************************/ // controlla il numero di thread liberi attuali e in caso incrementa
+		pool_increment(); // increments pool of threads
 		mutex_unlock(&queue_mtx);
 		
 		// sets a timeval structure to manage socket block

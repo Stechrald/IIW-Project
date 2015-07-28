@@ -396,7 +396,14 @@ void insert_resized(char *path, int q, int wid, int hei, char *cache) {
 	
 	// START MagickWand initialization
 	MagickWand *wand = NULL;
+	
 	MagickWandGenesis();
+	if (IsMagickWandInstantiated() == MagickFalse) {
+		perror("MagickWand environment failed to initialize\n");
+		// LOGGER
+		free(threads);
+		exit(EXIT_FAILURE);
+	}
 	
 	wand = NewMagickWand();
 	// END MagickWand initialization

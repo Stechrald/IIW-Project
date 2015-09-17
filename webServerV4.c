@@ -462,32 +462,56 @@ void insert_cache(char *path, int height, int width){
 	int q = 95;
 	insert_resized(path, q, width, height, new_path);
 	
-	fd_priority = open(priority_file, O_WRONLY|O_APPEND, 0777);
+	fd_priority = open(priority_file, O_CREAT|O_WRONLY|O_APPEND, 0777);
 	if (fd_priority == -1){
 		perror("Error in open");
 		exit(EXIT_FAILURE);
 	}
-	
-	char str[MAX_BUF];
 	memset(new_path, 0, strlen(new_path));
-	strcat(new_path, path+32);
-	strcat(new_path, ";");
-	sprintf(str, "%d" ,height);
-	strcat(new_path, str);
-	strcat(new_path, ";");
-	sprintf(str, "%d" ,width);
-	strcat(new_path, str);
-	strcat(new_path, "\n");
 	
-	if (write(fd_priority, new_path, strlen(new_path)) != strlen(new_path)){
+	if (write(fd_priority, path+32, strlen(path+32)) != (int) strlen(path+32)){
 		perror("Error in write");
 		exit(EXIT_FAILURE);
 	}
+	//write file name
+	char c = ';';
+	if (write(fd_priority, &c , 1) != 1){
+		perror("Error in write");
+		exit(EXIT_FAILURE);
+	}
+	//write divider char
+	char *w, *h;
+	sprintf(h, "%d" ,height);
+	if (write(fd_priority, h, strlen(h)) != (int) strlen(h)){
+		perror("Error in write");
+		exit(EXIT_FAILURE);
+	}
+	//write height
+	if (write(fd_priority, &c, 1) != 1){
+		perror("Error in write");
+		exit(EXIT_FAILURE);
+	}
+	//write divider char
+	
+	sprintf(w, "%d" ,width);
+	if (write(fd_priority, w, strlen(w)) != (int) strlen(w)){
+		perror("Error in write");
+		exit(EXIT_FAILURE);
+	}
+	//write width
+	
+	c = '\n';
+	if (write(fd_priority, c, 1) != 1){
+		perror("Error in write");
+		exit(EXIT_FAILURE);
+	}
+	//write newline
 	
 	if (close(fd_priority) == -1){
 		perror("Error in close");
 		exit(EXIT_FAILURE);
 	}
+	//close file
 }
 
 
